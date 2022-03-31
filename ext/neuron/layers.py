@@ -20,9 +20,9 @@ License: GPLv3
 import numpy as np
 import tensorflow as tf
 from keras import backend as K
-from keras.legacy import interfaces
+from ext.keras_legacy import interfaces
 from keras.layers import Layer
-from keras.engine.topology import Node
+from keras.engine.node import Node
 from copy import deepcopy
 
 # local
@@ -151,10 +151,10 @@ class SpatialTransformer(Layer):
         if len(trf) == 1:
             trf = trf[0]
             if self.is_affine[0]:
-                trf = tf.map_fn(lambda x: self._single_aff_to_shift(x, vol.shape[1:-1]), trf, dtype=tf.float32)
+                trf = tf.map_fn(lambda x: self._single_aff_to_shift(x, vol.shape[1:-1]), trf, fn_output_signature=tf.float32)
         # combine non linear and affine to obtain a single deformation field
         elif len(trf) == 2:
-            trf = tf.map_fn(lambda x: self._non_linear_and_aff_to_shift(x, vol.shape[1:-1]), trf, dtype=tf.float32)
+            trf = tf.map_fn(lambda x: self._non_linear_and_aff_to_shift(x, vol.shape[1:-1]), trf, fn_output_signature=tf.float32)
 
         # prepare location shift
         if self.indexing == 'xy':  # shift the first two dimensions
@@ -164,9 +164,9 @@ class SpatialTransformer(Layer):
 
         # map transform across batch
         if self.single_transform:
-            return tf.map_fn(self._single_transform, [vol, trf[0, :]], dtype=tf.float32)
+            return tf.map_fn(self._single_transform, [vol, trf[0, :]], fn_output_signature=tf.float32)
         else:
-            return tf.map_fn(self._single_transform, [vol, trf], dtype=tf.float32)
+            return tf.map_fn(self._single_transform, [vol, trf], fn_output_signature=tf.float32)
 
     def _single_aff_to_shift(self, trf, volshape):
         if len(trf.shape) == 1:  # go from vector to matrix
@@ -249,7 +249,7 @@ class VecInt(Layer):
 
         # necessary for multi_gpu models...
         loc_shift = K.reshape(loc_shift, [-1, *self.inshape[1:]])
-        loc_shift._keras_shape = inputs[0]._keras_shape
+        loc_shift._keras_shape = inputs[0].shape
 
         # prepare location shift
         if self.indexing == 'xy':  # shift the first two dimensions
@@ -261,8 +261,8 @@ class VecInt(Layer):
             assert self.out_time_pt is None, 'out_time_pt should be None if providing batch_based out_time_pt'
 
         # map transform across batch
-        out = tf.map_fn(self._single_int, [loc_shift] + inputs[1:], dtype=tf.float32)
-        out._keras_shape = inputs[0]._keras_shape
+        out = tf.map_fn(self._single_int, [loc_shift] + inputs[1:], fn_output_signature=tf.float32)
+        out._keras_shape = inputs[0].shape
         return out
 
     def _single_int(self, inputs):
@@ -356,7 +356,7 @@ class Resize(Layer):
             self.size0 = [self.size] * self.ndims
         elif self.size is None:
             self.size0 = [0] * self.ndims
-        elif isinstance(self.size, (list, tuple)):
+        elif isinstance(self.size, (list, tuple, tf.TensorShape)):
             self.size0 = deepcopy(self.size)
             assert len(self.size0) == self.ndims, \
                 'size length {} does not match number of dimensions {}'.format(len(self.size0), self.ndims)
@@ -391,7 +391,7 @@ class Resize(Layer):
             self.size0 = [int(self.inshape[f+1] * self.zoom_factor0[f]) for f in range(self.ndims)]
 
         # map transform across batch
-        return tf.map_fn(self._single_resize, vol, dtype=vol.dtype)
+        return tf.map_fn(self._single_resize, vol, fn_output_signature=vol.dtype)
 
     def compute_output_shape(self, input_shape):
 
@@ -797,7 +797,7 @@ class LocallyConnected3D(Layer):
         `rows` and `cols` values might have changed due to padding.
     """
 
-    @interfaces.legacy_conv3d_support
+    #@interfaces.legacy_conv3d_support
     def __init__(self, filters,
                  kernel_size,
                  strides=(1, 1, 1),

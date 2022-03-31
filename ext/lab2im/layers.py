@@ -193,7 +193,8 @@ class RandomSpatialDeformation(Layer):
         # apply deformations and return tensors with correct dtype
         if self.apply_affine_trans | self.apply_elastic_trans:
             inputs = [nrn_layers.SpatialTransformer(m)([v] + list_trans) for (m, v) in zip(self.inter_method, inputs)]
-        return [tf.cast(v, t) for (t, v) in zip(types, inputs)]
+        output = [tf.cast(v, t) for (t, v) in zip(types, inputs)]
+        return output if len(output) > 1 else output[0]
 
 
 class RandomCrop(Layer):
@@ -201,7 +202,7 @@ class RandomCrop(Layer):
     """Randomly crop all input tensors to a given shape. This cropping is applied to all channels.
     The input tensors are expected to have shape [batchsize, shape_dim1, ..., shape_dimn, channel].
     :param crop_shape: list with cropping shape in each dimension (excluding batch and channel dimension)
-
+:
     example:
     if input is a tensor of shape [batchsize, 160, 160, 160, 3],
     output = RandomCrop(crop_shape=[96, 128, 96])(input)
@@ -235,19 +236,21 @@ class RandomCrop(Layer):
         self.built = True
         super(RandomCrop, self).build(input_shape)
 
+    
     def call(self, inputs, **kwargs):
 
         # if one input only is provided, performs the cropping directly
         if not self.several_inputs:
-            return tf.map_fn(self._single_slice, inputs, dtype=inputs.dtype)
+            return tf.map_fn(self._single_slice, inputs, fn_output_signature=inputs.dtype)
 
         # otherwise we concatenate all inputs before cropping, so that they are all cropped at the same location
         else:
             types = [v.dtype for v in inputs]
             inputs = tf.concat([tf.cast(v, 'float32') for v in inputs], axis=-1)
-            inputs = tf.map_fn(self._single_slice, inputs, dtype=tf.float32)
+            inputs = tf.map_fn(self._single_slice, inputs, fn_output_signature=tf.float32)
             inputs = tf.split(inputs, self.list_n_channels, axis=-1)
-            return [tf.cast(v, t) for (t, v) in zip(types, inputs)]
+            output = [tf.cast(v, t) for (t, v) in zip(types, inputs)]
+            return output if len(output) > 1 else output[0]
 
     def _single_slice(self, vol):
         crop_idx = tf.cast(tf.random.uniform([self.n_dims], 0, np.array(self.crop_max_val), 'float32'), dtype='int32')
@@ -365,6 +368,7 @@ class RandomFlip(Layer):
         self.built = True
         super(RandomFlip, self).build(input_shape)
 
+    
     def call(self, inputs, **kwargs):
 
         # convert inputs to list, and get each input type
@@ -380,16 +384,17 @@ class RandomFlip(Layer):
         swapped_inputs = list()
         for i in range(len(inputs)):
             if self.swap_labels[i]:
-                swapped_inputs.append(tf.map_fn(self._single_swap, [inputs[i], rand_flip], dtype=types[i]))
+                swapped_inputs.append(tf.map_fn(self._single_swap, [inputs[i], rand_flip], fn_output_signature=types[i]))
             else:
                 swapped_inputs.append(inputs[i])
 
         # flip inputs and convert them back to their original type
         inputs = tf.concat([tf.cast(v, 'float32') for v in swapped_inputs], axis=-1)
-        inputs = tf.map_fn(self._single_flip, [inputs, rand_flip], dtype=tf.float32)
+        inputs = tf.map_fn(self._single_flip, [inputs, rand_flip], fn_output_signature=tf.float32)
         inputs = tf.split(inputs, self.list_n_channels, axis=-1)
-
-        return [tf.cast(v, t) for (t, v) in zip(types, inputs)]
+        
+        output = [tf.cast(v, t) for (t, v) in zip(types, inputs)]
+        return output if len(output) > 1 else output[0]
 
     def _single_swap(self, inputs):
         return K.switch(inputs[1], tf.gather(self.swap_lut, inputs[0]), inputs[0])
@@ -453,6 +458,7 @@ class SampleConditionalGMM(Layer):
         self.built = True
         super(SampleConditionalGMM, self).build(input_shape)
 
+    
     def call(self, inputs, **kwargs):
 
         # reformat labels and scatter indices
@@ -464,12 +470,12 @@ class SampleConditionalGMM(Layer):
         means = tf.concat([inputs[1][..., i] for i in range(self.n_channels)], 1)
         tile_shape = tf.concat([batch, tf.convert_to_tensor([1, ], dtype='int32')], axis=0)
         means = tf.tile(tf.expand_dims(tf.scatter_nd(tmp_indices, means, self.shape), 0), tile_shape)
-        means_map = tf.map_fn(lambda x: tf.gather(x[0], x[1]), [means, labels], dtype=tf.float32)
+        means_map = tf.map_fn(lambda x: tf.gather(x[0], x[1]), [means, labels], fn_output_signature=tf.float32)
 
         # same for stds
         stds = tf.concat([inputs[2][..., i] for i in range(self.n_channels)], 1)
         stds = tf.tile(tf.expand_dims(tf.scatter_nd(tmp_indices, stds, self.shape), 0), tile_shape)
-        stds_map = tf.map_fn(lambda x: tf.gather(x[0], x[1]), [stds, labels], dtype=tf.float32)
+        stds_map = tf.map_fn(lambda x: tf.gather(x[0], x[1]), [stds, labels], fn_output_signature=tf.float32)
 
         return stds_map * tf.random.normal(tf.shape(labels)) + means_map
 
@@ -566,11 +572,14 @@ class SampleResolution(Layer):
         if input_shape:
             self.add_batchsize = True
 
-        self.min_res_tens = tf.convert_to_tensor(self.min_res, dtype='float32')
+        # Move this to call, we need to reset the min_res tensor every time it's called
+        # else the shape gets screwed up
+        # self.min_res_tens = tf.convert_to_tensor(self.min_res, dtype='float32')
 
         self.built = True
         super(SampleResolution, self).build(input_shape)
 
+    
     def call(self, inputs, **kwargs):
 
         if not self.add_batchsize:
@@ -581,6 +590,7 @@ class SampleResolution(Layer):
         else:
             batch = tf.split(tf.shape(inputs), [1, -1])[0]
             tile_shape = tf.concat([batch, tf.convert_to_tensor([1], dtype='int32')], axis=0)
+            self.min_res_tens = tf.convert_to_tensor(self.min_res, dtype='float32')
             self.min_res_tens = tf.tile(tf.expand_dims(self.min_res_tens, 0), tile_shape)
 
             shape = tf.concat([batch, tf.convert_to_tensor([self.n_dims], dtype='int32')], axis=0)
@@ -705,6 +715,7 @@ class GaussianBlur(Layer):
         self.built = True
         super(GaussianBlur, self).build(input_shape)
 
+    
     def call(self, inputs, **kwargs):
 
         if self.use_mask:
@@ -789,6 +800,7 @@ class ImageGradients(Layer):
         self.built = True
         super(ImageGradients, self).build(input_shape)
 
+    
     def call(self, inputs, **kwargs):
 
         image = inputs
@@ -884,17 +896,19 @@ class DynamicGaussianBlur(Layer):
         self.built = True
         super(DynamicGaussianBlur, self).build(input_shape)
 
+    
     def call(self, inputs, **kwargs):
         image = inputs[0]
         sigma = inputs[-1]
         kernels = l2i_et.gaussian_kernel(sigma, self.max_sigma, self.blur_range, self.separable)
         if self.separable:
             for kernel in kernels:
-                image = tf.map_fn(self._single_blur, [image, kernel], dtype=tf.float32)
+                image = tf.map_fn(self._single_blur, [image, kernel], fn_output_signature=tf.float32)
         else:
-            image = tf.map_fn(self._single_blur, [image, kernels], dtype=tf.float32)
+            image = tf.map_fn(self._single_blur, [image, kernels], fn_output_signature=tf.float32)
         return image
 
+    
     def _single_blur(self, inputs):
         if self.n_channels > 1:
             split_channels = tf.split(inputs[0], [1] * self.n_channels, axis=-1)
@@ -995,6 +1009,7 @@ class MimicAcquisition(Layer):
         self.built = True
         super(MimicAcquisition, self).build(input_shape)
 
+    
     def call(self, inputs, **kwargs):
 
         # sort inputs
@@ -1019,7 +1034,7 @@ class MimicAcquisition(Layer):
         inshape_tens = tf.tile(tf.expand_dims(tf.convert_to_tensor(self.inshape[:-1]), 0), tile_shape)
         inshape_tens = l2i_et.expand_dims(inshape_tens, axis=[1] * self.n_dims)
         down_loc = K.clip(down_loc, 0., tf.cast(inshape_tens, 'float32'))
-        vol = tf.map_fn(self._single_down_interpn, [vol, down_loc], tf.float32)
+        vol = tf.map_fn(self._single_down_interpn, [vol, down_loc], fn_output_signature=tf.float32)
 
         # add noise
         if self.noise_std > 0:
@@ -1030,7 +1045,7 @@ class MimicAcquisition(Layer):
         # upsample
         up_loc = tf.tile(self.up_grid, tf.concat([batchsize, tf.ones([self.n_dims + 1], dtype='int32')], axis=0))
         up_loc = tf.cast(up_loc, 'float32') / l2i_et.expand_dims(up_zoom_factor, axis=[1] * self.n_dims)
-        vol = tf.map_fn(self._single_up_interpn, [vol, up_loc], tf.float32)
+        vol = tf.map_fn(self._single_up_interpn, [vol, up_loc], fn_output_signature=tf.float32)
 
         # return upsampled volume
         if not self.build_dist_map:
@@ -1128,6 +1143,7 @@ class BiasFieldCorruption(Layer):
         self.built = True
         super(BiasFieldCorruption, self).build(input_shape)
 
+    
     def call(self, inputs, **kwargs):
 
         if not self.several_inputs:
@@ -1147,7 +1163,8 @@ class BiasFieldCorruption(Layer):
             bias_field = nrn_layers.Resize(size=self.inshape[0][1:self.n_dims + 1], interp_method='linear')(bias_field)
             bias_field = tf.math.exp(bias_field)
 
-            return [tf.math.multiply(bias_field, v) for v in inputs]
+            output = [tf.math.multiply(bias_field, v) for v in inputs]
+            return output if len(output) > 1 else output[0]
 
         else:
             return inputs
@@ -1230,6 +1247,7 @@ class IntensityAugmentation(Layer):
         self.built = True
         super(IntensityAugmentation, self).build(input_shape)
 
+    
     def call(self, inputs, **kwargs):
 
         # prepare shape for sampling the noise and gamma std dev (depending on whether we augment channels separately)
@@ -1302,6 +1320,7 @@ class DiceLoss(Layer):
         self.built = True
         super(DiceLoss, self).build(input_shape)
 
+    
     def call(self, inputs, **kwargs):
 
         # make sure tensors are probabilistic
@@ -1348,6 +1367,7 @@ class WeightedL2Loss(Layer):
         self.built = True
         super(WeightedL2Loss, self).build(input_shape)
 
+    
     def call(self, inputs, **kwargs):
         gt = inputs[0]
         pred = inputs[1]
@@ -1391,6 +1411,7 @@ class ResetValuesToZero(Layer):
         self.built = True
         super(ResetValuesToZero, self).build(input_shape)
 
+    
     def call(self, inputs, **kwargs):
         values = tf.cast(self.values_tens, dtype=inputs.dtype)
         for i in range(self.n_values):
@@ -1427,6 +1448,7 @@ class ConvertLabels(Layer):
         self.built = True
         super(ConvertLabels, self).build(input_shape)
 
+    
     def call(self, inputs, **kwargs):
         return tf.gather(self.lut, tf.cast(inputs, dtype='int32'))
 
@@ -1492,6 +1514,7 @@ class PadAroundCentre(Layer):
         self.built = True
         super(PadAroundCentre, self).build(input_shape)
 
+    
     def call(self, inputs, **kwargs):
         return tf.pad(inputs, self.pad_margin_tens, mode='CONSTANT', constant_values=self.value)
 
@@ -1555,6 +1578,7 @@ class MaskEdges(Layer):
         self.built = True
         super(MaskEdges, self).build(input_shape)
 
+    
     def call(self, inputs, **kwargs):
 
         # build mask

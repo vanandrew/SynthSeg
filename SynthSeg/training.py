@@ -21,7 +21,7 @@ import numpy as np
 import tensorflow as tf
 from keras import models
 import keras.callbacks as KC
-from keras.optimizers import Adam
+from keras.optimizer_v1 import Adam
 from inspect import getmembers, isclass
 
 # project imports

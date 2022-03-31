@@ -12,7 +12,7 @@ from keras import backend as K
 from tqdm import tqdm as tqdm
 from keras import layers as KL
 from sklearn.decomposition import PCA
-from keras.utils import plot_model
+from keras.utils.vis_utils import plot_model
 from IPython.display import Image
 
 
